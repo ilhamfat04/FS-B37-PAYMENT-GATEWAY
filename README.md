@@ -1,189 +1,160 @@
-# Nodemailer
+# Gomail
 
-`Nodemailer` is a module for Node.js that allows us to easily send emails.
+`Gomail` is a simple and efficient package to send emails.
 
 ## Prepare
 
-- Install package nodemailer on server side
+- Install [gomail](https://pkg.go.dev/gopkg.in/gomail.v2) package on server side
 
   ```text
-  npm i nodemailer
+  go get gopkg.in/gomail.v2
   ```
 
-* Add email & password to your `.env` file (server side) :
+* Make sure Add email & password to your `.env` file (server side) :
 
   ```text
   SYSTEM_EMAIL=xxxxxxxxx@gmail.com
   SYSTEM_PASSWORD=xxxxxxxxx
   ```
 
-* If an error occurs when sending an email:
+* How to get your gmail account password application:
 
-  Error message :
+  - Make doing 2 step verification & click `Password App`
 
-  ```text
-  Error: Invalid login: 535-5.7.8 Username and Password not accepted.
-  ```
+    ![img1](./mail-1.png)
 
-  Handle :
+  - Select Application & Device
 
-  - Go to google account page
+    ![img2](./mail-2.png)
 
-    ![alt img](./account.png)
+  - On Yellow Box is your `Password App`, copy and paste into `.env`
 
-  - Click `Keamanan` and `Nonaktifkan akses`
-
-    ![alt img](./security.png)
-
-  - `Turn on` allow less secure apps
-
-    ![alt img](./accept.png)
+    ![img3](./mail-3.png)
 
 ## Handle send email on backend
 
-> File : `server/src/controller/transaction.js`
+> File : `server/handlers/transaction.go`
 
-- Import nodemailer :
+- Import gomail :
 
-  ```javascript
-  const nodemailer = require("nodemailer");
+  ```go
+  "gopkg.in/gomail.v2"
   ```
 
 * Function for handle send email :
 
-  ```javascript
-  const sendEmail = async (status, transactionId) => {
-    // Config service and email account
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-      auth: {
-        user: process.env.SYSTEM_EMAIL,
-        pass: process.env.SYSTEM_PASSWORD,
-      },
-    });
+  ```go
+  func SendMail(status string, transaction models.Transaction) {
 
-    // Get transaction data
-    let data = await transaction.findOne({
-      where: {
-        id: transactionId,
-      },
-      attributes: {
-        exclude: ["createdAt", "updatedAt", "password"],
-      },
-      include: [
-        {
-          model: user,
-          as: "buyer",
-          attributes: {
-            exclude: ["createdAt", "updatedAt", "password", "status"],
-          },
-        },
-        {
-          model: product,
-          as: "product",
-          attributes: {
-            exclude: [
-              "createdAt",
-              "updatedAt",
-              "idUser",
-              "qty",
-              "price",
-              "desc",
-            ],
-          },
-        },
-      ],
-    });
+    if status != transaction.Status && (status == "success") {
+      var CONFIG_SMTP_HOST = "smtp.gmail.com"
+      var CONFIG_SMTP_PORT = 587
+      var CONFIG_SENDER_NAME = "DumbMerch <demo.dumbways@gmail.com>"
+      var CONFIG_AUTH_EMAIL = os.Getenv("EMAIL_SYSTEM")
+      var CONFIG_AUTH_PASSWORD = os.Getenv("PASSWORD_SYSTEM")
 
-    data = JSON.parse(JSON.stringify(data));
+      var productName = transaction.Product.Name
+      var price = strconv.Itoa(transaction.Product.Price)
 
-    // Email options content
-    const mailOptions = {
-      from: process.env.SYSTEM_EMAIL,
-      to: data.buyer.email,
-      subject: "Payment status",
-      text: "Your payment is <br />" + status,
-      html: `<!DOCTYPE html>
-              <html lang="en">
-                <head>
-                  <meta charset="UTF-8" />
-                  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-                  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-                  <title>Document</title>
-                  <style>
-                    h1 {
-                      color: brown;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <h2>Product payment :</h2>
-                  <ul style="list-style-type:none;">
-                    <li>Name : ${data.product.name}</li>
-                    <li>Total payment: ${convertRupiah.convert(data.price)}</li>
-                    <li>Status : <b>${status}</b></li>
-                  </ul>  
-                </body>
-              </html>`,
-    };
+      mailer := gomail.NewMessage()
+      mailer.SetHeader("From", CONFIG_SENDER_NAME)
+      mailer.SetHeader("To", transaction.Buyer.Email)
+      mailer.SetHeader("Subject", "Transaction Status")
+      mailer.SetBody("text/html", fmt.Sprintf(`<!DOCTYPE html>
+      <html lang="en">
+        <head>
+        <meta charset="UTF-8" />
+        <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Document</title>
+        <style>
+          h1 {
+          color: brown;
+          }
+        </style>
+        </head>
+        <body>
+        <h2>Product payment :</h2>
+        <ul style="list-style-type:none;">
+          <li>Name : %s</li>
+          <li>Total payment: Rp.%s</li>
+          <li>Status : <b>%s</b></li>
+        </ul>
+        </body>
+      </html>`, productName, price, status))
 
-    // Send an email if there is a change in the transaction status
-    if (data.status != status) {
-      transporter.sendMail(mailOptions, (err, info) => {
-        if (err) throw err;
-        console.log("Email sent: " + info.response);
+      dialer := gomail.NewDialer(
+        CONFIG_SMTP_HOST,
+        CONFIG_SMTP_PORT,
+        CONFIG_AUTH_EMAIL,
+        CONFIG_AUTH_PASSWORD,
+      )
 
-        return res.send({
-          status: "Success",
-          message: info.response,
-        });
-      });
+      err := dialer.DialAndSend(mailer)
+      if err != nil {
+        log.Fatal(err.Error())
+      }
+
+      log.Println("Mail sent! to " + transaction.Buyer.Email)
     }
-  };
+  }
+  ```
+
+- Get One Transaction from repository `GetOneTransaction` using orderId parameter
+
+  ```go
+  transaction, _ := h.TransactionRepository.GetOneTransaction(orderId)
   ```
 
 * Add sendEmail function on conditional notification function with two params (`status`,`orderId`)
 
   ```javascript
-  ...
-  if (transactionStatus == "capture") {
-    if (fraudStatus == "challenge") {
-      // TODO set transaction status on your database to 'challenge'
-      // and response with 200 OK
-      sendEmail("pending", orderId); //sendEmail with status pending and order id
-      handleTransaction("pending", orderId);
-      res.status(200);
-    } else if (fraudStatus == "accept") {
-      // TODO set transaction status on your database to 'success'
-      // and response with 200 OK
-      sendEmail("success", orderId); //sendEmail with status success and order id
-      updateProduct(orderId);
-      handleTransaction("success", orderId);
-      res.status(200);
-    }
-  } else if (transactionStatus == "settlement") {
-    // TODO set transaction status on your database to 'success'
-    // and response with 200 OK
-    sendEmail("success", orderId); //sendEmail with status success and order id
-    updateProduct(orderId);
-    handleTransaction("success", orderId);
-    res.status(200);
-  } else if (
-    transactionStatus == "cancel" ||
-    transactionStatus == "deny" ||
-    transactionStatus == "expire"
-  ) {
-    // TODO set transaction status on your database to 'failure'
-    // and response with 200 OK
-    sendEmail("failed", orderId); //sendEmail with status failed and order id
-    handleTransaction("failed", orderId);
-    res.status(200);
-  } else if (transactionStatus == "pending") {
-    // TODO set transaction status on your database to 'pending' / waiting payment
-    // and response with 200 OK
-    sendEmail("pending", orderId); //sendEmail with status pending and order id
-    handleTransaction("pending", orderId);
-    res.status(200);
+  if transactionStatus == "capture" {
+  	if fraudStatus == "challenge" {
+  		// TODO set transaction status on your database to 'challenge'
+  		// e.g: 'Payment status challenged. Please take action on your Merchant Administration Portal
+  		h.TransactionRepository.UpdateTransaction("pending",  orderId)
+  	} else if fraudStatus == "accept" {
+  		// TODO set transaction status on your database to 'success'
+  		SendMail("success", transaction) // Call SendMail function ...
+  		h.TransactionRepository.UpdateTransaction("success",  orderId)
+  	}
+  } else if transactionStatus == "settlement" {
+  	// TODO set transaction status on your databaase to 'success'
+  	SendMail("success", transaction) // Call SendMail function ...
+  	h.TransactionRepository.UpdateTransaction("success",  orderId)
+  } else if transactionStatus == "deny" {
+  	// TODO you can ignore 'deny', because most of the time it allows payment retries
+  	// and later can become success
+  	SendMail("failed", transaction) // Call SendMail function ...
+  	h.TransactionRepository.UpdateTransaction("failed",  orderId)
+  } else if transactionStatus == "cancel" || transactionStatus == "expire" {
+  	// TODO set transaction status on your databaase to 'failure'
+  	SendMail("failed", transaction) // Call SendMail function ...
+  	h.TransactionRepository.UpdateTransaction("failed",  orderId)
+  } else if transactionStatus == "pending" {
+  	// TODO set transaction status on your databaase to 'pending' / waiting payment
+  	h.TransactionRepository.UpdateTransaction("pending",  orderId)
   }
-  ...
+  ```
+
+## Create GetOneTransaction repository
+
+> File : `server/repositories/transaction.go`
+
+- Declare `GetOneTransaction` method on `TransactionRepository interface`
+
+  ```go
+  GetOneTransaction(ID string) (models.Transaction, error)
+  ```
+
+- Create `GetOneTransaction` method
+
+  ```go
+  func (r *repository) GetOneTransaction(ID string) (models.Transaction, error) {
+    var transaction models.Transaction
+    err := r.db.Preload("Product").Preload("Product.User").Preload("Buyer").Preload("Seller").First(&transaction, "id = ?", ID).Error
+
+    return transaction, err
+  }
   ```
