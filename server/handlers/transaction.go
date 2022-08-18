@@ -6,6 +6,8 @@ import (
 	"dumbmerch/models"
 	"dumbmerch/repositories"
 	"encoding/json"
+	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -15,12 +17,14 @@ import (
 	"github.com/midtrans/midtrans-go"
 	"github.com/midtrans/midtrans-go/coreapi"
 	"github.com/midtrans/midtrans-go/snap"
+
 	// import gopkg.in/gomail.v2 package here ...
+	"gopkg.in/gomail.v2"
 )
 
 var c = coreapi.Client{
 	ServerKey: os.Getenv("SERVER_KEY"),
-	ClientKey:  os.Getenv("CLIENT_KEY"),
+	ClientKey: os.Getenv("CLIENT_KEY"),
 }
 
 type handlerTransaction struct {
@@ -84,12 +88,12 @@ func (h *handlerTransaction) CreateTransaction(w http.ResponseWriter, r *http.Re
 	}
 
 	transaction := models.Transaction{
-		ID: TransactionId,
+		ID:        TransactionId,
 		ProductID: request.ProductId,
-		BuyerID: userId,
-		SellerID: request.SellerId,
-		Price: request.Price,
-		Status: "pending",
+		BuyerID:   userId,
+		SellerID:  request.SellerId,
+		Price:     request.Price,
+		Status:    "pending",
 	}
 
 	newTransaction, err := h.TransactionRepository.CreateTransaction(transaction)
@@ -105,27 +109,27 @@ func (h *handlerTransaction) CreateTransaction(w http.ResponseWriter, r *http.Re
 		json.NewEncoder(w).Encode(err.Error())
 		return
 	}
-	
+
 	// 1. Initiate Snap client
 	var s = snap.Client{}
 	s.New(os.Getenv("SERVER_KEY"), midtrans.Sandbox)
 	// Use to midtrans.Production if you want Production Environment (accept real transaction).
-	
+
 	// 2. Initiate Snap request param
 	req := &snap.Request{
 		TransactionDetails: midtrans.TransactionDetails{
-		  OrderID:  strconv.Itoa(dataTransactions.ID),
-		  GrossAmt: int64(dataTransactions.Price),
-		}, 
+			OrderID:  strconv.Itoa(dataTransactions.ID),
+			GrossAmt: int64(dataTransactions.Price),
+		},
 		CreditCard: &snap.CreditCardDetails{
-		  Secure: true,
+			Secure: true,
 		},
 		CustomerDetail: &midtrans.CustomerDetails{
-		  FName: dataTransactions.Buyer.Name,
-		  Email: dataTransactions.Buyer.Email,
+			FName: dataTransactions.Buyer.Name,
+			Email: dataTransactions.Buyer.Email,
 		},
-	  }
-	
+	}
+
 	// 3. Execute request create Snap transaction to Midtrans Snap API
 	snapResp, _ := s.CreateTransaction(req)
 
@@ -150,33 +154,38 @@ func (h *handlerTransaction) Notification(w http.ResponseWriter, r *http.Request
 	orderId := notificationPayload["order_id"].(string)
 
 	// Get One Transaction from repository GetOneTransaction using orderId parameter here ...
+	transaction, _ := h.TransactionRepository.GetOneTransaction(orderId)
 
 	if transactionStatus == "capture" {
 		if fraudStatus == "challenge" {
 			// TODO set transaction status on your database to 'challenge'
 			// e.g: 'Payment status challenged. Please take action on your Merchant Administration Portal
-			h.TransactionRepository.UpdateTransaction("pending",  orderId)
+			h.TransactionRepository.UpdateTransaction("pending", orderId)
 		} else if fraudStatus == "accept" {
 			// TODO set transaction status on your database to 'success'
 			// Call SendMail function here ...
-			h.TransactionRepository.UpdateTransaction("success",  orderId)
+			SendMail("success", transaction) // Call SendMail function ...
+			h.TransactionRepository.UpdateTransaction("success", orderId)
 		}
 	} else if transactionStatus == "settlement" {
 		// TODO set transaction status on your databaase to 'success'
 		// Call SendMail function here ...
-		h.TransactionRepository.UpdateTransaction("success",  orderId)
+		SendMail("success", transaction) // Call SendMail function ...
+		h.TransactionRepository.UpdateTransaction("success", orderId)
 	} else if transactionStatus == "deny" {
 		// TODO you can ignore 'deny', because most of the time it allows payment retries
 		// and later can become success
 		// Call SendMail function here ...
-		h.TransactionRepository.UpdateTransaction("failed",  orderId)
+		SendMail("failed", transaction) // Call SendMail function ...
+		h.TransactionRepository.UpdateTransaction("failed", orderId)
 	} else if transactionStatus == "cancel" || transactionStatus == "expire" {
 		// TODO set transaction status on your databaase to 'failure'
 		// Call SendMail function here ...
-		h.TransactionRepository.UpdateTransaction("failed",  orderId)
+		SendMail("failed", transaction) // Call SendMail function ...
+		h.TransactionRepository.UpdateTransaction("failed", orderId)
 	} else if transactionStatus == "pending" {
 		// TODO set transaction status on your databaase to 'pending' / waiting payment
-		h.TransactionRepository.UpdateTransaction("pending",  orderId)
+		h.TransactionRepository.UpdateTransaction("pending", orderId)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -184,13 +193,67 @@ func (h *handlerTransaction) Notification(w http.ResponseWriter, r *http.Request
 
 func convertResponseTransaction(t models.Transaction) transactiondto.TransactionResponse {
 	return transactiondto.TransactionResponse{
-		ID:      	t.ID,
-		Product:   	t.Product,
-		Buyer:  	t.Buyer,
-		Seller: 	t.Seller,
-		Price:  	t.Price,
-		Status:    	t.Status,
+		ID:      t.ID,
+		Product: t.Product,
+		Buyer:   t.Buyer,
+		Seller:  t.Seller,
+		Price:   t.Price,
+		Status:  t.Status,
 	}
 }
 
 // Create function for handle send mail here ...
+func SendMail(status string, transaction models.Transaction) {
+
+	if status != transaction.Status && (status == "success") {
+		var CONFIG_SMTP_HOST = "smtp.gmail.com"
+		var CONFIG_SMTP_PORT = 587
+		var CONFIG_SENDER_NAME = "DumbMerch <demo.dumbways@gmail.com>"
+		var CONFIG_AUTH_EMAIL = os.Getenv("EMAIL_SYSTEM")
+		var CONFIG_AUTH_PASSWORD = os.Getenv("PASSWORD_SYSTEM")
+
+		var productName = transaction.Product.Name
+		var price = strconv.Itoa(transaction.Product.Price)
+
+		mailer := gomail.NewMessage()
+		mailer.SetHeader("From", CONFIG_SENDER_NAME)
+		mailer.SetHeader("To", transaction.Buyer.Email)
+		mailer.SetHeader("Subject", "Transaction Status")
+		mailer.SetBody("text/html", fmt.Sprintf(`<!DOCTYPE html>
+	  <html lang="en">
+		<head>
+		<meta charset="UTF-8" />
+		<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Document</title>
+		<style>
+		  h1 {
+		  color: brown;
+		  }
+		</style>
+		</head>
+		<body>
+		<h2>Product payment :</h2>
+		<ul style="list-style-type:none;">
+		  <li>Name : %s</li>
+		  <li>Total payment: Rp.%s</li>
+		  <li>Status : <b>%s</b></li>
+		</ul>
+		</body>
+	  </html>`, productName, price, status))
+
+		dialer := gomail.NewDialer(
+			CONFIG_SMTP_HOST,
+			CONFIG_SMTP_PORT,
+			CONFIG_AUTH_EMAIL,
+			CONFIG_AUTH_PASSWORD,
+		)
+
+		err := dialer.DialAndSend(mailer)
+		if err != nil {
+			log.Fatal(err.Error())
+		}
+
+		log.Println("Mail sent! to " + transaction.Buyer.Email)
+	}
+}
